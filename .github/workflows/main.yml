@@ -1,20 +1,28 @@
 name: Convert DMG to ZIP
 
 on:
-  workflow_dispatch: # 允许手动触发执行
+  workflow_dispatch: 
 
 jobs:
   convert:
-    runs-on: macos-latest # 使用 macOS 环境，因为自带 hdiutil 处理 dmg 非常方便
+    runs-on: macos-latest 
     
     steps:
       - name: Get Latest Obsidian Version
         id: get_version
         run: |
-          # 获取最新版本号和下载链接
-          LATEST_URL=$(curl -s https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest | grep "browser_download_url.*universal.dmg" | cut -d '"' -f 4 | head -n 1)
+          # 使用 jq 查找所有以 .dmg 结尾的任务，并选择第一个
+          # 如果你的 Mac 是 M1/M2/M3 芯片（Apple Silicon），可以优先找 arm64
+          # 这里我们找最通用的 .dmg
+          LATEST_URL=$(curl -s https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest | jq -r '.assets[] | select(.name | endswith(".dmg")) | .browser_download_url' | head -n 1)
+          
+          if [ -z "$LATEST_URL" ] || [ "$LATEST_URL" == "null" ]; then
+            echo "错误：未能获取下载链接"
+            exit 1
+          fi
+          
           echo "url=$LATEST_URL" >> $GITHUB_OUTPUT
-          echo "下载链接: $LATEST_URL"
+          echo "Found URL: $LATEST_URL"
 
       - name: Download DMG
         run: |
@@ -22,21 +30,23 @@ jobs:
 
       - name: Extract DMG
         run: |
-          # 挂载 DMG 镜像
-          hdiutil attach obsidian.dmg
-          # 将里面的 .app 复制出来（路径通常在 /Volumes/Obsidian...）
-          # 我们使用通配符匹配挂载目录
-          cp -R /Volumes/Obsidian*/Obsidian.app ./Obsidian.app
-          # 卸载镜像
-          hdiutil detach /Volumes/Obsidian*
+          # 挂载
+          hdiutil attach obsidian.dmg -mountpoint ./obsidian_mount
+          
+          # 查找挂载目录下的 .app 并复制
+          # 使用 -R 保留软链接和权限
+          cp -R ./obsidian_mount/*.app ./Obsidian.app
+          
+          # 卸载
+          hdiutil detach ./obsidian_mount
 
       - name: Create ZIP
         run: |
-          zip -r Obsidian-macOS.zip Obsidian.app
+          zip -ry Obsidian-macOS.zip Obsidian.app
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Obsidian-ZIP-Package
           path: Obsidian-macOS.zip
-          retention-days: 1 # 下载完后可以自动删除
+          retention-days: 1
