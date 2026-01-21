@@ -10,14 +10,21 @@ jobs:
     steps:
       - name: Get Latest Obsidian Version
         id: get_version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用内置 Token
         run: |
-          # 使用 jq 查找所有以 .dmg 结尾的任务，并选择第一个
-          # 如果你的 Mac 是 M1/M2/M3 芯片（Apple Silicon），可以优先找 arm64
-          # 这里我们找最通用的 .dmg
-          LATEST_URL=$(curl -s https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest | jq -r '.assets[] | select(.name | endswith(".dmg")) | .browser_download_url' | head -n 1)
+          # 使用 Token 访问 API 避免被限制
+          RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest)
+          
+          # 调试输出（如果还是报错，可以在日志里看到返回了什么）
+          echo "API Response Summary: $(echo $RESPONSE | cut -c 1-100)..."
+
+          # 提取下载链接
+          # 这里的 select 逻辑：优先找 arm64（M系列芯片），如果没有则找 universal 或普通的 .dmg
+          LATEST_URL=$(echo $RESPONSE | jq -r '.assets[] | select(.name | endswith(".dmg")) | .browser_download_url' | head -n 1)
           
           if [ -z "$LATEST_URL" ] || [ "$LATEST_URL" == "null" ]; then
-            echo "错误：未能获取下载链接"
+            echo "错误：未能获取下载链接。API 返回内容可能不正确。"
             exit 1
           fi
           
@@ -30,18 +37,21 @@ jobs:
 
       - name: Extract DMG
         run: |
+          # 创建挂载点
+          mkdir -p ./obsidian_mount
           # 挂载
-          hdiutil attach obsidian.dmg -mountpoint ./obsidian_mount
+          hdiutil attach obsidian.dmg -mountpoint ./obsidian_mount -nobrowse
           
-          # 查找挂载目录下的 .app 并复制
-          # 使用 -R 保留软链接和权限
+          # 复制应用
           cp -R ./obsidian_mount/*.app ./Obsidian.app
           
           # 卸载
           hdiutil detach ./obsidian_mount
+          echo "提取完成"
 
       - name: Create ZIP
         run: |
+          # -r 递归，-y 保留符号链接（非常重要，否则应用可能打不开）
           zip -ry Obsidian-macOS.zip Obsidian.app
 
       - name: Upload Artifact
